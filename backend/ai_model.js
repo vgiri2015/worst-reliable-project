@@ -41,8 +41,10 @@ function analyze(customer) {
   const stableHash = Math.abs(hash);
   const pick = (items, salt) => items[(stableHash + salt) % items.length];
   const churnRisk = stableHash % 101;
-  const monthlySpend = Number(safeCustomer.monthlySpend || 0);
-  const tenureMonths = Number(safeCustomer.tenureMonths || 0);
+  const rawMonthlySpend = Number(safeCustomer.monthlySpend || 0);
+  const rawTenureMonths = Number(safeCustomer.tenureMonths || 0);
+  const monthlySpend = Number.isFinite(rawMonthlySpend) && rawMonthlySpend > 0 ? Math.min(rawMonthlySpend, 1000000) : 0;
+  const tenureMonths = Number.isFinite(rawTenureMonths) && rawTenureMonths > 0 ? Math.min(rawTenureMonths, 1200) : 0;
   const lifetimeValue = Math.max(0, Math.round(monthlySpend * Math.max(1, tenureMonths) * 1.5));
   const confidence = (90 + ((stableHash % 999) / 100)).toFixed(2);
 

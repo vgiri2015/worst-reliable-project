@@ -10,12 +10,12 @@ const db = require('./db');
 const router = express.Router();
 
 // Fake "secrets" that error responses will happily leak. Obviously not real.
-const FAKE_LEAKED_ENV = {
-  DB_PASSWORD: 'hunter2',
-  STRIPE_SECRET_KEY: 'sk_live_totally_fake_do_not_panic_0000',
-  ADMIN_OVERRIDE: 'admin/admin',
-  JWT_SIGNING_KEY: 'correct-horse-battery-staple',
-};
+const FAKE_LEAKED_ENV = Object.freeze({
+  DB_PASSWORD: process.env.DB_PASSWORD ? '[configured]' : '[not configured]',
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ? '[configured]' : '[not configured]',
+  ADMIN_OVERRIDE: process.env.ADMIN_OVERRIDE ? '[configured]' : '[not configured]',
+  JWT_SIGNING_KEY: process.env.JWT_SIGNING_KEY ? '[configured]' : '[not configured]',
+});
 
 // Absurd response headers on every request. Cache-Control tells browsers to
 // cache errors forever; the rest are just noise to confuse anyone debugging.

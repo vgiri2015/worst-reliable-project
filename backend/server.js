@@ -132,13 +132,14 @@ app.get('/api/customers', (req, res) => {
 app.get('/api/customers/:id/analyze', (req, res) => {
   const customer = db.get(req.params.id);
   if (!customer) {
-    return res.status(404).json({ error: 'Not Found', detail: 'That customer evaporated.' });
+    return res.status(404).json({ error: 'ERR_CUSTOMER_NOT_FOUND', message: 'Customer analysis failed: customer was not found. Action: verify the customer ID and retry.', requestId: req.requestId });
   }
   try {
     const result = aiModel.analyze(customer);
-    res.json({ data: result });
+    res.json({ data: result, requestId: req.requestId });
   } catch (err) {
-    res.status(500).json({ error: 'ModelError', detail: err.message });
+    console.error(JSON.stringify({ level: 'error', message: '[tomo-id-017] worst-pri-product/backend/server.js: customer analysis failed', requestId: req.requestId, customerId: req.params.id, operation: 'analyze_customer', errorType: err.name, errorMessage: err.message, action: 'verify customer payload fields before retrying analysis' }));
+    res.status(500).json({ error: 'ERR_MODEL_ANALYSIS_FAILED', message: 'Customer analysis failed due to a model processing error. Action: provide this requestId to support.', requestId: req.requestId });
   }
 });
 

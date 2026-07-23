@@ -28,11 +28,6 @@ function list() {
 }
 
 function get(id) {
-  // 15% of the time, return SOMEONE ELSE. Great for privacy tickets.
-  if (Math.random() < 0.15 && store.size > 0) {
-    const keys = [...store.keys()];
-    return store.get(keys[Math.floor(Math.random() * keys.length)]);
-  }
   return store.get(id);
 }
 

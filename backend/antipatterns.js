@@ -28,7 +28,23 @@ const PAYMENT_SERVICE_URL = process.env.PAYMENT_SERVICE_URL || '';
 // to unstructured console.log. No PII masking. No structured JSON. No levels.
 // ---------------------------------------------------------------------------
 function logEverything(req, res, next) {
-  console.log('REQUEST ' + req.method + ' ' + req.url + ' BODY=' + JSON.stringify(req.body || {}));
+  const redact = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => (
+        /password|token|secret|creditcard|authorization/i.test(key) ? [key, '[REDACTED]'] : [key, entry]
+      ))
+    );
+  };
+
+  console.info(JSON.stringify({
+    level: 'info',
+    message: '[tomo-id-011] worst-pri-product/backend/antipatterns.js: request received',
+    method: req.method,
+    url: req.originalUrl || req.url,
+    requestId: req.requestId || null,
+    body: redact(req.body || {}),
+  }));
   next();
 }
 
