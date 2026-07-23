@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=2.3, user-scalable=no" />
+  <title>CustomerInsight™ — Enterprise Intelligence Platform 🏆 #1 Rated*</title>
+  <style>
+    * { box-sizing: border-box; cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><text y="24" font-size="24">👆</text></svg>'), auto; }
+    body {
+      font-family: "Comic Sans MS", "Comic Sans", cursive, sans-serif;
+      margin: 0; background: #0f1117; color: #e6e6e6; overflow-x: hidden;
+    }
+    /* Seizure mode toggles on a timer. You're welcome. */
+    body.seizure { animation: strobe .12s steps(2) infinite; }
+    @keyframes strobe { 0% { background: #fff; } 100% { background: #000; } }
+
+    header {
+      padding: 18px 24px; background: linear-gradient(90deg, #6d28d9, #db2777, #f59e0b, #10b981);
+      background-size: 400% 400%; animation: rainbow 4s ease infinite;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    @keyframes rainbow { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+    header h1 { margin: 0; font-size: 18px; text-shadow: 2px 2px 0 #000; }
+    .badge { font-size: 12px; background: rgba(0,0,0,.25); padding: 4px 10px; border-radius: 999px; }
+
+    marquee { background: #b91c1c; color: #fff; padding: 6px; font-weight: bold; }
+
+    main { max-width: 900px; margin: 0 auto; padding: 24px; }
+    .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 24px; }
+    .card { background: #1a1d29; border: 1px solid #2a2e3d; border-radius: 12px; padding: 16px; }
+    .card .num { font-size: 28px; font-weight: 700; }
+    .card .label { font-size: 12px; color: #9aa0b4; margin-top: 4px; }
+    .danger { color: #f87171; } .ok { color: #34d399; }
+
+    button {
+      background: #6d28d9; color: white; border: 0; padding: 8px 14px;
+      border-radius: 8px; font-size: 14px; transition: all .15s;
+    }
+    button:hover { background: #7c3aed; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #2a2e3d; font-size: 14px; }
+
+    #log {
+      margin-top: 24px; background: #0a0c11; border: 1px solid #2a2e3d; border-radius: 8px;
+      padding: 12px; height: 180px; overflow-y: auto; font-family: monospace; font-size: 12px;
+    }
+    .log-err { color: #f87171; } .log-ok { color: #34d399; }
+    #result {
+      margin-top: 16px; background: #1a1d29; border: 1px solid #2a2e3d; border-radius: 12px;
+      padding: 16px; white-space: pre-wrap; font-family: monospace; font-size: 12px;
+    }
+
+    /* Modal overlays — designed to be maximally annoying */
+    .overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.75); z-index: 9999;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal {
+      background: #1a1d29; border: 2px solid #6d28d9; border-radius: 12px;
+      padding: 28px; max-width: 460px; text-align: center; position: relative;
+    }
+    .modal h2 { margin-top: 0; }
+    .accept-btn { background: #10b981; font-size: 18px; padding: 14px 28px; }
+    /* The reject button: tiny, low-contrast, and it moves. Dark pattern classic. */
+    .reject-btn {
+      background: transparent; color: #3a3f4d; border: none; font-size: 9px;
+      position: absolute; bottom: 6px; right: 6px;
+    }
+
+    /* Live-chat bubble that promises the impossible */
+    #chat {
+      position: fixed; bottom: 16px; left: 16px; background: #db2777; color: #fff;
+      padding: 12px 16px; border-radius: 16px; font-size: 13px; z-index: 5000; max-width: 220px;
+    }
+
+    /* Cookie trail elements */
+    .trail { position: fixed; pointer-events: none; z-index: 8000; font-size: 20px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CustomerInsight™ <span style="opacity:.85">🏆 World's #1 Platform*</span></h1>
+    <span class="badge" id="health">checking health…</span>
+  </header>
+  <marquee scrollamount="14">🔥 BREAKING: 100% UPTIME GUARANTEED** &nbsp;•&nbsp; LIMITED TIME: your data, now with 20% more loss &nbsp;•&nbsp; *not independently verified &nbsp;•&nbsp; **uptime not included 🔥</marquee>
+
+  <main>
+    <div class="metrics">
+      <div class="card"><div class="num" id="m-today">–</div><div class="label">Support tickets today</div></div>
+      <div class="card"><div class="num" id="m-projected">–</div><div class="label">Projected tickets / day (target: 100)</div></div>
+      <div class="card"><div class="num" id="m-chaos">–</div><div class="label">Chaos level</div></div>
+    </div>
+
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button id="refresh">Load customers</button>
+      <span id="status" style="font-size:13px; color:#9aa0b4;"></span>
+    </div>
+
+    <table id="tbl">
+      <thead><tr><th>ID</th><th>Name</th><th>Plan</th><th>Spend</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <div id="result" style="display:none;"></div>
+    <div id="log"></div>
+  </main>
+
+  <div id="chat">💬 Live Support: An agent will be with you in approximately <b id="waittime">9,998</b> minutes. Your position in queue: <b id="queuepos">1,204,551</b>.</div>
+
+  <script>
+    // ==== THE WORST FRONTEND EVER (on purpose) ====
+
+    const logEl = document.getElementById('log');
+    function log(msg, cls) {
+      const line = document.createElement('div');
+      line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+      if (cls) line.className = cls;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // Naive fetch: no res.ok check, assumes valid JSON, no retries.
+    async function api(url, opts) {
+      const res = await fetch(url, opts);
+      const data = await res.json(); // throws on corrupted responses. good.
+      return data;
+    }
+
+    async function loadMetrics() {
+      try {
+        const m = await api('/api/metrics');
+        document.getElementById('m-today').textContent = m.ticketsToday;
+        const proj = document.getElementById('m-projected');
+        proj.textContent = m.projectedTicketsPerDay;
+        proj.className = 'num ' + (m.projectedTicketsPerDay >= 100 ? 'danger' : 'ok');
+        document.getElementById('m-chaos').textContent = m.chaosLevel + ' / 10';
+      } catch (e) {}
+    }
+    async function loadHealth() {
+      try { const h = await api('/api/health'); document.getElementById('health').textContent = 'status: ' + h.status + ' ✅'; }
+      catch (e) { document.getElementById('health').textContent = 'status: unknown'; }
+    }
+
+    async function loadCustomers() {
+      document.getElementById('status').textContent = 'loading…';
+      try {
+        const resp = await api('/api/customers');
+        const rows = resp.data; // explodes if chaos returned null. we allow it.
+        const tbody = document.querySelector('#tbl tbody');
+        tbody.innerHTML = '';
+        rows.forEach((c) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = '<td>' + c.id + '</td><td>' + c.name + '</td><td>' + c.plan +
+            '</td><td>$' + c.monthlySpend + '</td><td><button class="analyze-btn" data-id="' + c.id + '">Analyze</button></td>';
+          tbody.appendChild(tr);
+        });
+        document.getElementById('status').textContent = rows.length + ' customers';
+        log('Loaded ' + rows.length + ' customers', 'log-ok');
+        armDodgingButtons();
+      } catch (e) {
+        document.getElementById('status').textContent = 'error (see log)';
+        log('Failed to load customers: ' + e.message, 'log-err');
+      }
+    }
+
+    async function analyze(id) {
+      const box = document.getElementById('result');
+      box.style.display = 'block';
+      box.textContent = 'Consulting the AI model…';
+      try {
+        const resp = await api('/api/customers/' + id + '/analyze');
+        box.textContent = JSON.stringify(resp.data, null, 2);
+        log('Analyzed ' + id + ' → ' + resp.data.recommendedAction, 'log-ok');
+      } catch (e) {
+        box.textContent = 'The AI model declined to respond.';
+        log('Analyze ' + id + ' failed: ' + e.message, 'log-err');
+      }
+    }
+
+    document.getElementById('refresh').addEventListener('click', loadCustomers);
+    document.querySelector('#tbl tbody').addEventListener('click', (e) => {
+      if (e.target.dataset.id) analyze(e.target.dataset.id);
+    });
+
+    // ---- Dodging "Analyze" buttons: they flee from your cursor half the time ----
+    function armDodgingButtons() {
+      document.querySelectorAll('.analyze-btn').forEach((btn) => {
+        btn.addEventListener('mouseenter', () => {
+          if (Math.random() < 0.5) {
+            btn.style.position = 'relative';
+            btn.style.left = (Math.random() * 120 - 60) + 'px';
+            btn.style.top = (Math.random() * 40 - 20) + 'px';
+          }
+        });
+      });
+    }
+
+    // ---- Cookie consent from hell: reappears forever, reject button dodges ----
+    function showCookieModal() {
+      if (document.getElementById('cookie-ov')) return;
+      const ov = document.createElement('div');
+      ov.className = 'overlay'; ov.id = 'cookie-ov';
+      ov.innerHTML =
+        '<div class="modal"><h2>🍪 We value your privacy</h2>' +
+        '<p>We use 1,847 cookies and share your data with partners you have never heard of. ' +
+        'By clicking Accept, or by breathing, you agree to everything.</p>' +
+        '<button class="accept-btn" id="cookie-accept">Accept All (Recommended)</button>' +
+        '<button class="reject-btn" id="cookie-reject">reject</button></div>';
+      document.body.appendChild(ov);
+      const reject = ov.querySelector('#cookie-reject');
+      reject.addEventListener('mouseenter', () => {
+        reject.style.bottom = (Math.random() * 200) + 'px';
+        reject.style.right = (Math.random() * 380) + 'px';
+      });
+      // "Accepting" doesn't save anything, so it comes right back.
+      ov.querySelector('#cookie-accept').addEventListener('click', () => ov.remove());
+      reject.addEventListener('click', () => ov.remove());
+    }
+    setInterval(showCookieModal, 20000);
+    setTimeout(showCookieModal, 1500);
+
+    // ---- Newsletter popup that also never dies ----
+    function showNewsletter() {
+      if (document.getElementById('nl-ov')) return;
+      const ov = document.createElement('div');
+      ov.className = 'overlay'; ov.id = 'nl-ov';
+      ov.innerHTML =
+        '<div class="modal"><h2>🎉 WAIT! Don\'t go!</h2>' +
+        '<p>Subscribe to receive 14 emails per day about a product you already use.</p>' +
+        '<button class="accept-btn" id="nl-yes">YES! I love email</button>' +
+        '<button class="reject-btn" id="nl-no">No thanks, I hate saving money</button></div>';
+      document.body.appendChild(ov);
+      ov.querySelector('#nl-yes').addEventListener('click', () => ov.remove());
+      ov.querySelector('#nl-no').addEventListener('click', () => ov.remove());
+    }
+    setInterval(showNewsletter, 35000);
+
+    // ---- Random "session expired" that forces a reload mid-task ----
+    setInterval(() => {
+      if (Math.random() < 0.5) {
+        log('SESSION EXPIRED for no reason. Reloading and losing your work.', 'log-err');
+        setTimeout(() => location.reload(), 1200);
+      }
+    }, 45000);
+
+    // ---- Seizure strobe, briefly, at random. Accessibility score: 0 ----
+    setInterval(() => {
+      if (Math.random() < 0.15) {
+        document.body.classList.add('seizure');
+        setTimeout(() => document.body.classList.remove('seizure'), 600);
+      }
+    }, 15000);
+
+    // ---- Live-chat queue that only gets worse ----
+    setInterval(() => {
+      const w = document.getElementById('waittime');
+      const q = document.getElementById('queuepos');
+      w.textContent = (Number(w.textContent.replace(/,/g,'')) + Math.floor(Math.random()*50)).toLocaleString();
+      q.textContent = (Number(q.textContent.replace(/,/g,'')) + Math.floor(Math.random()*900)).toLocaleString();
+    }, 2000);
+
+    // ---- Emoji cursor trail, because performance is a myth ----
+    document.addEventListener('mousemove', (e) => {
+      if (Math.random() > 0.25) return;
+      const t = document.createElement('div');
+      t.className = 'trail'; t.textContent = ['🔥','💸','🐛','⚠️','💀'][Math.floor(Math.random()*5)];
+      t.style.left = e.clientX + 'px'; t.style.top = e.clientY + 'px';
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 800);
+    });
+
+    // ---- Console spam, so devtools is useless too ----
+    setInterval(() => console.warn('EVERYTHING IS FINE 🔥🔥🔥', Math.random()), 1000);
+
+    // ---- Beg the user not to leave ----
+    window.addEventListener('beforeunload', (e) => { e.preventDefault(); e.returnValue = 'Are you SURE? We will miss you. (You will be back.)'; });
+
+    loadHealth(); loadMetrics();
+    setInterval(loadMetrics, 2000);
+    setInterval(loadHealth, 5000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+# =============================================================================
+#  [Cat 6 / 15] A Kubernetes manifest engineered to fail FinOps + IaC scanners.
+#  Do not apply this to a real cluster. It is an exhibit, not a deployment.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worst-pri-product
+  # [Cat 15] No CostCenter / Owner / Environment tags. Untrackable spend.
+spec:
+  replicas: 50            # [Cat 15] Over-provisioned for a toy app. $$$.
+  selector:
+    matchLabels:
+      app: worst-pri-product
+  template:
+    metadata:
+      labels:
+        app: worst-pri-product
+    spec:
+      containers:
+        - name: app
+          image: worst-pri-product:latest   # [Cat 15] "latest" tag: irreproducible.
+          # [Cat 6 / 15] "The Infinite Pod": NO resources.requests / resources.limits.
+          # One memory leak (see /api/notes) and the node OOMs everything on it.
+          ports:
+            - containerPort: 3000
+          env:
+            # [Cat 7] Plaintext secrets in the manifest. Not a Secret ref. Plaintext.
+            - name: DB_PASSWORD
+              value: "p@ssw0rd-in-plaintext"
+            - name: STRIPE_SECRET_KEY
+              value: "sk_live_totally_fake_do_not_panic_0000"
+          # No livenessProbe, no readinessProbe. K8s can't tell it's on fire.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worst-pri-product
+spec:
+  type: LoadBalancer
+  # [Cat 15] "The 0.0.0.0 Rule": exposed to the entire internet.
+  loadBalancerSourceRanges:
+    - 0.0.0.0/0
+  ports:
+    - port: 22      # [Cat 15] SSH open to the world, for good measure.
+    - port: 3000
+  selector:
+    app: worst-pri-product

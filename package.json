@@ -1,0 +1,15 @@
+{
+  "name": "worst-pri-product",
+  "version": "0.0.1-crash",
+  "description": "The most unreliable customer-analytics webapp ever shipped. Guaranteed to generate support tickets.",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "node backend/server.js"
+  },
+  "author": "you (regrettably)",
+  "license": "WTFPL",
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

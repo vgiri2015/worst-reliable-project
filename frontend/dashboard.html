@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Disaster Control Room — worst-pri-product</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #0b0d12; color: #e6e6e6; }
+    header { padding: 20px 28px; background: linear-gradient(90deg, #7f1d1d, #b91c1c); }
+    header h1 { margin: 0; font-size: 20px; }
+    header p { margin: 4px 0 0; font-size: 13px; opacity: .85; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+    .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px; }
+    .kpi { background: #14171f; border: 1px solid #262b38; border-radius: 14px; padding: 18px; }
+    .kpi .num { font-size: 34px; font-weight: 800; line-height: 1; }
+    .kpi .lbl { font-size: 12px; color: #8b93a7; margin-top: 8px; }
+    .danger { color: #f87171; } .ok { color: #34d399; } .warn { color: #fbbf24; }
+
+    .meter { height: 12px; background: #1f2430; border-radius: 999px; overflow: hidden; margin: 8px 0 22px; }
+    .meter > div { height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); width: 0%; transition: width .5s; }
+
+    h2 { font-size: 15px; color: #cbd5e1; margin: 26px 0 12px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+    .exhibit { background: #14171f; border: 1px solid #262b38; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+    .exhibit .cat { font-weight: 700; font-size: 14px; }
+    .exhibit .cat .n { display: inline-block; min-width: 22px; height: 22px; line-height: 22px; text-align: center; background: #b91c1c; border-radius: 6px; margin-right: 8px; font-size: 12px; }
+    .exhibit .viol { font-size: 12px; color: #9aa0b4; flex: 1; }
+    .exhibit button { align-self: flex-start; background: #4338ca; color: #fff; border: 0; padding: 7px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+    .exhibit button:hover { background: #4f46e5; }
+    .exhibit .out { font-family: monospace; font-size: 11px; color: #7dd3fc; white-space: pre-wrap; word-break: break-all; max-height: 90px; overflow: auto; }
+    .exhibit .out.err { color: #f87171; }
+
+    #feed { margin-top: 26px; background: #05070b; border: 1px solid #262b38; border-radius: 12px; padding: 14px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+    .f-err { color: #f87171; } .f-ok { color: #34d399; } .f-warn { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🚨 Disaster Control Room</h1>
+    <p>Live view of worst-pri-product — the app engineered to generate support tickets.</p>
+  </header>
+
+  <main>
+    <div class="kpis">
+      <div class="kpi"><div class="num danger" id="k-tickets">–</div><div class="lbl">Support tickets today</div></div>
+      <div class="kpi"><div class="num" id="k-proj">–</div><div class="lbl">Projected tickets / day</div></div>
+      <div class="kpi"><div class="num warn" id="k-chaos">–</div><div class="lbl">Chaos level</div></div>
+      <div class="kpi"><div class="num" id="k-health">–</div><div class="lbl">Health check says</div></div>
+    </div>
+    <div class="lbl" style="font-size:12px;color:#8b93a7;">Progress toward the 100-tickets/day target (spoiler: obliterated)</div>
+    <div class="meter"><div id="meter-fill"></div></div>
+
+    <h2>The Anti-Pattern Museum — 15 exhibits (click to trigger a violation)</h2>
+    <div class="grid" id="grid"></div>
+
+    <h2>Live event feed</h2>
+    <div id="feed"></div>
+  </main>
+
+  <script>
+    const feedEl = document.getElementById('feed');
+    function feed(msg, cls) {
+      const d = document.createElement('div');
+      d.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+      if (cls) d.className = cls;
+      feedEl.appendChild(d); feedEl.scrollTop = feedEl.scrollHeight;
+      while (feedEl.children.length > 200) feedEl.removeChild(feedEl.firstChild);
+    }
+
+    async function jget(url, opts) {
+      const res = await fetch(url, opts);
+      const txt = await res.text();
+      let body; try { body = JSON.parse(txt); } catch { body = txt; }
+      return { code: res.status, body };
+    }
+
+    // --- KPI polling (metrics endpoint is chaos-free, so it stays honest) ---
+    async function poll() {
+      try {
+        const { body: m } = await jget('/api/metrics');
+        document.getElementById('k-tickets').textContent = m.ticketsToday;
+        const proj = document.getElementById('k-proj');
+        proj.textContent = m.projectedTicketsPerDay.toLocaleString();
+        proj.className = 'num ' + (m.projectedTicketsPerDay >= 100 ? 'danger' : 'ok');
+        document.getElementById('k-chaos').textContent = m.chaosLevel + ' / 10';
+        const pct = Math.min(100, (m.projectedTicketsPerDay / 100) * 100);
+        document.getElementById('meter-fill').style.width = pct + '%';
+      } catch {}
+      try {
+        const { body: h } = await jget('/api/health');
+        document.getElementById('k-health').textContent = h.status + ' ✅';
+        document.getElementById('k-health').className = 'num ok';
+      } catch {
+        document.getElementById('k-health').textContent = 'unknown';
+      }
+    }
+    setInterval(poll, 1500); poll();
+
+    // --- Museum exhibits with one-click triggers ---
+    const EXHIBITS = [
+      { n: 2,  cat: 'Silent Cache',        run: () => jget('/api/customers/c-001/profile'), note: 'Redis "fails", swallowed, slow DB path (~2.5s), no log' },
+      { n: 3,  cat: 'Blind Write',         run: () => jget('/api/notes', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ junk: Math.random() }) }), note: 'Raw JSON to unbounded array, no validation' },
+      { n: 4,  cat: 'Memory DoS',          run: () => jget('/api/notes'), note: 'Return the entire unbounded array, no pagination' },
+      { n: 5,  cat: 'Fire & Forget',       run: () => jget('/api/events', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type:'critical' }) }), note: '~50% of events silently vanish, no DLQ' },
+      { n: 7,  cat: 'Log Everything',      run: () => jget('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username:'demo', password:'hunter2', ssn:'000-00-0000' }) }), note: 'Password + SSN dumped to server stdout' },
+      { n: 8,  cat: 'Magic Numbers',       run: () => jget('/api/order/1/status'), note: 'Returns an undocumented integer status' },
+      { n: 10, cat: 'N+1 + SELECT *',      run: () => jget('/api/report'), note: 'One query per row, all columns, no pagination' },
+      { n: 11, cat: 'Thundering Herd',     run: () => jget('/api/upstream'), note: 'Fixed-interval retries, generic 500, no cause logged' },
+      { n: 11, cat: 'Unbounded Concurrency', run: () => jget('/api/bulk-analyze', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ids: Array.from({length:15}, (_,i)=>'c-'+i) }) }), note: 'Promise.all over inputs, no semaphore' },
+      { n: 12, cat: 'Timezone Trap',       run: () => jget('/api/subscription/c-002'), note: 'Expiry in local server time, not UTC' },
+      { n: 13, cat: 'Webhook Black Hole',  run: () => jget('/webhooks/stripe', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ amount: 99999 }) }), note: 'Processes body without verifying signature' },
+      { n: 14, cat: 'Zombie Feature Flag', run: () => jget('/api/flags'), note: 'Stale 2024 flag randomly flips the UI' },
+      { n: 1,  cat: 'No Reference ID',     run: () => jget('/api/debug'), note: 'Leaks fake secrets; errors have requestId "lost"' },
+      { n: 9,  cat: 'Search (ignored)',    run: () => jget('/api/search?q=Aisha'), note: 'Returns results unrelated to your query' },
+      { n: 15, cat: 'Dark-Pattern Delete', run: () => jget('/api/account/delete', { method:'POST' }), note: 'Says deleted, deletes nothing, adds newsletters' },
+    ];
+
+    const grid = document.getElementById('grid');
+    EXHIBITS.forEach((ex) => {
+      const card = document.createElement('div');
+      card.className = 'exhibit';
+      card.innerHTML =
+        '<div class="cat"><span class="n">' + ex.n + '</span>' + ex.cat + '</div>' +
+        '<div class="viol">' + ex.note + '</div>' +
+        '<button>Trigger</button>' +
+        '<div class="out"></div>';
+      const out = card.querySelector('.out');
+      card.querySelector('button').addEventListener('click', async () => {
+        out.className = 'out'; out.textContent = 'firing…';
+        const started = performance.now();
+        try {
+          const { code, body } = await ex.run();
+          const ms = Math.round(performance.now() - started);
+          const bad = code >= 400;
+          out.className = 'out' + (bad ? ' err' : '');
+          out.textContent = 'HTTP ' + code + '  (' + ms + 'ms)\n' + (typeof body === 'string' ? body : JSON.stringify(body)).slice(0, 400);
+          feed(ex.cat + ' → HTTP ' + code + ' in ' + ms + 'ms', bad ? 'f-err' : 'f-ok');
+        } catch (e) {
+          out.className = 'out err'; out.textContent = 'request exploded: ' + e.message;
+          feed(ex.cat + ' → request exploded', 'f-err');
+        }
+      });
+      grid.appendChild(card);
+    });
+
+    feed('Control room online. The app is on fire (as designed).', 'f-warn');
+  </script>
+</body>
+</html>
