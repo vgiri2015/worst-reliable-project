@@ -31,15 +31,23 @@ function ridiculousHeaders(req, res, next) {
 // "Login" that accepts literally anything and logs the password in plaintext.
 router.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
-  // The cardinal sin: log credentials in plaintext to the server console.
-  console.log(`[AUTH] login attempt user="${username}" password="${password}" (stored in plaintext, obviously)`);
-  // Always succeeds. As long as you sent *a* username, you're in. As admin.
+  const safeUsername = typeof username === 'string' ? username.slice(0, 128) : '';
+  console.info(JSON.stringify({
+    level: 'info',
+    message: '[tomo-id-030] worst-pri-product/backend/worst_features.js: login attempt received',
+    requestId: req.requestId || null,
+    usernamePresent: Boolean(safeUsername),
+    passwordSupplied: typeof password === 'string' && password.length > 0
+  }));
+  if (!safeUsername) {
+    return res.status(400).json({ error: 'ERR_LOGIN_USERNAME_REQUIRED', message: 'Login failed: username is required. Action: provide a username and retry.', requestId: req.requestId || null });
+  }
   res.json({
     ok: true,
-    token: 'Bearer guest-token-that-is-also-admin',
-    role: 'admin',
-    message: 'Logged in! We did not check your password but we did save it.',
-    yourPasswordForConfirmation: password || '(none, still worked)',
+    token: `Bearer guest-token-${Buffer.from(safeUsername).toString('base64url').slice(0, 16)}`,
+    role: 'guest',
+    message: 'Logged in with a least-privilege guest session.',
+    requestId: req.requestId || null,
   });
 });
 

@@ -31,22 +31,20 @@ function chaosMiddleware(req, res, next) {
   const jitter = roll() ? Math.floor(Math.random() * 4000) : Math.floor(Math.random() * 120);
 
   setTimeout(() => {
-    // 2) Random hard failures with unhelpful messages.
+    // 2) Random hard failures with support-actionable messages.
     if (roll()) {
       const [code, title, detail] = NONSENSE_ERRORS[Math.floor(Math.random() * NONSENSE_ERRORS.length)];
-      return res.status(code).json({ error: title, detail, requestId: 'lost' });
+      return res.status(code).json({ error: `ERR_CHAOS_${code}`, message: `${title}: ${detail} Action: provide requestId to support and retry after transient failure clears.`, requestId: req.requestId || null });
     }
 
     // 3) Random "success" that is actually empty — the classic silent failure.
     if (roll() && Math.random() < 0.3) {
-      return res.status(200).json(null);
+      return res.status(503).json({ error: 'ERR_EMPTY_CHAOS_RESPONSE', message: 'Chaos middleware produced an empty upstream response. Action: retry with the requestId if the issue persists.', requestId: req.requestId || null });
     }
 
     // 4) Occasionally corrupt the response so the frontend can't parse it.
     if (roll() && Math.random() < 0.2) {
-      res.status(200);
-      res.set('Content-Type', 'application/json');
-      return res.end('{"data": [ this is not valid json lol'); // deliberately broken
+      return res.status(503).json({ error: 'ERR_CORRUPT_CHAOS_RESPONSE', message: 'Chaos middleware blocked a corrupt response before it reached the client. Action: retry after transient failure clears.', requestId: req.requestId || null });
     }
 
     next();

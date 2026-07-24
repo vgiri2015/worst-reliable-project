@@ -59,6 +59,15 @@ function analyze(customer) {
     recommendedAction: pick(ACTIONS, 11),
     modelConfidencePercent: confidence,
     modelVersion: 'v1.0-supportable',
+    analysisFingerprint: `acie-${stableHash}`,
+    explanation: {
+      primarySignals: ['customerId', 'plan', 'monthlySpend', 'tenureMonths'],
+      boundedInputs: {
+        monthlySpend,
+        tenureMonths,
+      },
+      supportNote: 'Deterministic analysis fingerprint can be used to compare repeated customer analyses.',
+    },
     analyzedAt: new Date().toISOString(),
   };
 }

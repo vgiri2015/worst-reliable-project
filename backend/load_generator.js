@@ -25,18 +25,27 @@ const stats = { requests: 0, ok: 0, failed: 0, tickets: 0, byCode: {} };
 
 async function hit(pathAndOpts) {
   const [url, opts] = pathAndOpts;
+  const requestId = `load-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.LOAD_FETCH_TIMEOUT_MS || 5000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   stats.requests += 1;
   try {
-    const res = await fetch(TARGET + url, opts);
+    const res = await fetch(TARGET + url, {
+      ...(opts || {}),
+      headers: { ...((opts && opts.headers) || {}), 'x-request-id': requestId },
+      signal: controller.signal,
+    });
     const code = res.statusCode || res.status;
     stats.byCode[code] = (stats.byCode[code] || 0) + 1;
     // read body so corrupted-JSON responses also register as client-side failures
     let body = null;
     try {
       body = await res.json();
-    } catch (_) {
+    } catch (err) {
       stats.failed += 1;
       stats.tickets += 1; // parse crash = angry customer
+      console.error(JSON.stringify({ level: 'error', message: '[tomo-id-025] worst-pri-product/backend/load_generator.js: response JSON parse failed', requestId, path: url, errorType: err.name, action: 'inspect server response body and content-type' }));
       return;
     }
     if (code >= 400 || body === null) {
@@ -47,6 +56,9 @@ async function hit(pathAndOpts) {
   } catch (err) {
     stats.failed += 1;
     stats.tickets += 1; // network/connection error
+    console.error(JSON.stringify({ level: 'error', message: '[tomo-id-026] worst-pri-product/backend/load_generator.js: request failed or timed out', requestId, path: url, timeoutMs, errorType: err.name, action: 'verify target availability and timeout budget' }));
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

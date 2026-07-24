@@ -40,29 +40,29 @@ fi
 
 # Free the port if something's already squatting on it.
 if lsof -ti:"$PORT" >/dev/null 2>&1; then
-  echo "Port $PORT busy — killing the old victim..."
+  printf '{"level":"warn","message":"[tomo-id-031] worst-pri-product/run.sh: port busy; terminating existing process","port":%s}\n' "$PORT"
   kill "$(lsof -ti:"$PORT")" 2>/dev/null || true
   sleep 1
 fi
 
 PIDS=()
 cleanup() {
-  echo ""
-  echo "Shutting down the disaster..."
+  printf '\n'
+  printf '{"level":"info","message":"[tomo-id-032] worst-pri-product/run.sh: shutdown requested","process_count":%s}\n' "${#PIDS[@]}"
   for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
   pkill -f load_generator.js 2>/dev/null || true
   exit 0
 }
 trap cleanup INT TERM
 
-echo "Launching app on :$PORT (chaos $CHAOS_LEVEL)..."
+printf '{"level":"info","message":"[tomo-id-033] worst-pri-product/run.sh: launching app","port":%s,"chaos_level":%s}\n' "$PORT" "$CHAOS_LEVEL"
 CHAOS_LEVEL="$CHAOS_LEVEL" PORT="$PORT" node backend/server.js &
 PIDS+=($!)
 
 sleep 2
 
 if [[ "${1:-}" != "--no-swarm" ]]; then
-  echo "Unleashing $USERS simulated customers ($RPM req/min each)..."
+  printf '{"level":"info","message":"[tomo-id-034] worst-pri-product/run.sh: launching load generator","users":%s,"rpm":%s}\n' "$USERS" "$RPM"
   TARGET="http://localhost:$PORT" USERS="$USERS" RPM="$RPM" node backend/load_generator.js &
   PIDS+=($!)
 fi

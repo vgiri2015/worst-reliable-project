@@ -32,12 +32,9 @@ function get(id) {
 }
 
 function upsert(customer) {
-  const id = customer.id || `c-${Math.floor(Math.random() * 100000)}`;
-  const record = { ...customer, id };
-  // 20% of the time, we simply... don't save it. And report success anyway.
-  if (Math.random() < 0.2) {
-    return { ...record, _saved: false };
-  }
+  const safeCustomer = customer && typeof customer === 'object' && !Array.isArray(customer) ? customer : {};
+  const id = safeCustomer.id ? String(safeCustomer.id) : `c-${Math.floor(Math.random() * 100000)}`;
+  const record = { ...safeCustomer, id };
   store.set(id, record);
   return { ...record, _saved: true };
 }

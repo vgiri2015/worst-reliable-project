@@ -32,18 +32,20 @@ function logEverything(req, res, next) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => (
-        /password|token|secret|creditcard|authorization/i.test(key) ? [key, '[REDACTED]'] : [key, entry]
+        /password|token|secret|creditcard|authorization|cookie|ssn|email/i.test(key) ? [key, '[REDACTED]'] : [key, entry]
       ))
     );
   };
 
+  const redactedBody = redact(req.body || {});
   console.info(JSON.stringify({
     level: 'info',
-    message: '[tomo-id-011] worst-pri-product/backend/antipatterns.js: request received',
+    message: '[tomo-id-023] worst-pri-product/backend/antipatterns.js: request received',
     method: req.method,
     url: req.originalUrl || req.url,
     requestId: req.requestId || null,
-    body: redact(req.body || {}),
+    bodyKeys: Object.keys(redactedBody),
+    bodyPreview: redactedBody,
   }));
   next();
 }

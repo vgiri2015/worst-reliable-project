@@ -156,11 +156,27 @@ startBlindJob();
 // [Cat 12] NO graceful shutdown handler. SIGTERM just yanks the plug mid-write.
 // (We deliberately do NOT register process.on('SIGTERM', ...). Data loss on deploy.)
 
-app.listen(PORT, () => {
-  console.log('='.repeat(64));
-  console.log('  WORST-PRI-PRODUCT is now degrading service on port ' + PORT);
-  console.log('  Open:  http://localhost:' + PORT);
-  console.log('  Chaos level: ' + CHAOS + '/10   (set CHAOS_LEVEL to change)');
-  console.log('  Anti-Pattern Museum: http://localhost:' + PORT + '/api/museum');
-  console.log('='.repeat(64));
+const server = app.listen(PORT, () => {
+  console.info(JSON.stringify({
+    level: 'info',
+    message: '[tomo-id-027] worst-pri-product/backend/server.js: server started',
+    port: Number(PORT),
+    chaosLevel: CHAOS,
+    museumPath: '/api/museum'
+  }));
 });
+
+function shutdown(signal) {
+  console.info(JSON.stringify({ level: 'info', message: '[tomo-id-028] worst-pri-product/backend/server.js: graceful shutdown started', signal }));
+  server.close((err) => {
+    if (err) {
+      console.error(JSON.stringify({ level: 'error', message: '[tomo-id-029] worst-pri-product/backend/server.js: graceful shutdown failed', errorType: err.name, errorMessage: err.message, action: 'inspect open connections and retry termination' }));
+      process.exit(1);
+    }
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10000).unref();
+}
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
