@@ -87,7 +87,7 @@ async function userLoop(id, stopAt) {
 
 async function pollServerTickets() {
   try {
-    const res = await fetch(TARGET + '/api/metrics');
+    const res = await fetch(TARGET + '/api/metrics', { signal: AbortSignal.timeout(10000) }); // tomosu: 01.external-call-timeouts.js
     const m = await res.json();
     return m;
   } catch (_) {
