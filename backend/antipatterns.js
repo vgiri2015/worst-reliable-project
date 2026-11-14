@@ -224,6 +224,7 @@ function startBlindJob() {
       }
     } catch (e) {
       // catch (e) {} — the classic. Suppress everything.
+      console.error("(anonymous) failed; continuing without it", e); // tomosu: 27.failure-branch-no-signal.js
     }
   }, 5000);
 }
