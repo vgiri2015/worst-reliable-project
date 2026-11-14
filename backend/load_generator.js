@@ -91,6 +91,7 @@ async function pollServerTickets() {
     const m = await res.json();
     return m;
   } catch (_) {
+    console.error("pollServerTickets failed; returning a fallback value", _); // tomosu: 21.fallback-hides-failure.js
     return null;
   }
 }
