@@ -8,6 +8,8 @@
 #                                # from ../worst-pri-otel or $OTEL_STACK_DIR)
 #    DOWNSTREAM_OTLP_ENDPOINT=http://host.docker.internal:5318 ./run.sh --with-collector
 #                                # ...and forward all telemetry to another OTLP receiver
+#    OTEL_COLLECTOR_NETWORK=tomosu-demo_default DOWNSTREAM_OTLP_ENDPOINT=http://engine:4318 ./run.sh --with-collector
+#                                # ...receiver runs in another compose stack: join its network
 #    OTEL_SDK_DISABLED=true ./run.sh   # no telemetry at all
 # =============================================================================
 set -euo pipefail
@@ -111,6 +113,16 @@ if (( WITH_COLLECTOR )); then
   if ! curl -fsS http://localhost:13133/ >/dev/null 2>&1; then
     printf '{"level":"error","message":"[tomo-id-037] worst-pri-product/run.sh: collector not healthy after 30s","action":"(cd $OTEL_STACK_DIR && docker compose logs otel-collector)"}\n' >&2
     exit 69
+  fi
+  # Receiver in another Docker network (e.g. a Tomosu engine container): join it
+  # so DOWNSTREAM_OTLP_ENDPOINT can use the receiver's service name.
+  if [[ -n "${OTEL_COLLECTOR_NETWORK:-}" ]]; then
+    if ! docker network connect "$OTEL_COLLECTOR_NETWORK" worst-pri-otel-collector 2>/dev/null \
+        && ! docker inspect worst-pri-otel-collector --format '{{json .NetworkSettings.Networks}}' | grep -q "\"$OTEL_COLLECTOR_NETWORK\""; then
+      printf '{"level":"error","message":"[tomo-id-043] worst-pri-product/run.sh: could not join receiver network","network":"%s","action":"check the name with docker network ls"}\n' "$OTEL_COLLECTOR_NETWORK" >&2
+      exit 69
+    fi
+    printf '{"level":"info","message":"[tomo-id-044] worst-pri-product/run.sh: collector joined receiver network","network":"%s"}\n' "$OTEL_COLLECTOR_NETWORK"
   fi
 elif [[ "${OTEL_SDK_DISABLED:-false}" != "true" ]] && ! curl -s -o /dev/null --max-time 2 "$OTEL_EXPORTER_OTLP_ENDPOINT/v1/traces" 2>/dev/null; then
   printf '{"level":"warn","message":"[tomo-id-038] worst-pri-product/run.sh: no OTLP receiver reachable; telemetry export will fail","otlp_endpoint":"%s","action":"re-run with --with-collector or set OTEL_SDK_DISABLED=true"}\n' "$OTEL_EXPORTER_OTLP_ENDPOINT" >&2

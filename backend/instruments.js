@@ -9,11 +9,11 @@
  */
 
 const { trace, metrics, SpanStatusCode, ValueType } = require('@opentelemetry/api');
-const { SERVICE_VERSION } = require('./telemetry');
+const { PACKAGE_VERSION } = require('./telemetry');
 
 const SCOPE = 'worst-pri-product';
-const tracer = trace.getTracer(SCOPE, SERVICE_VERSION);
-const meter = metrics.getMeter(SCOPE, SERVICE_VERSION);
+const tracer = trace.getTracer(SCOPE, PACKAGE_VERSION);
+const meter = metrics.getMeter(SCOPE, PACKAGE_VERSION);
 
 const LATENCY_BUCKETS_S = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5];
 const DELAY_BUCKETS_MS = [5, 25, 50, 100, 250, 500, 1000, 2000, 3000, 4000];

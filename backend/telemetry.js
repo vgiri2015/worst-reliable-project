@@ -13,6 +13,7 @@
  *
  *   OTEL_EXPORTER_OTLP_ENDPOINT   collector base URL   (default http://localhost:4318)
  *   OTEL_SERVICE_NAME             overrides the serviceName passed to start()
+ *   SERVICE_VERSION               service.version (default: git commit SHA, see below)
  *   OTEL_RESOURCE_ATTRIBUTES      extra resource attributes (k=v,k2=v2)
  *   OTEL_METRIC_EXPORT_INTERVAL   metric push interval ms (default here: 10000)
  *   OTEL_TRACES_SAMPLER(_ARG)     sampling (default parentbased_always_on)
@@ -31,8 +32,36 @@ const { BatchLogRecordProcessor } = require('@opentelemetry/sdk-logs');
 const { resourceFromAttributes } = require('@opentelemetry/resources');
 const { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } = require('@opentelemetry/semantic-conventions');
 
-const SERVICE_VERSION = require('../package.json').version;
+const PACKAGE_VERSION = require('../package.json').version;
 const SERVICE_NAMESPACE = 'worst-pri';
+
+/**
+ * service.version is the git commit the process runs. The Tomosu engine
+ * matches it against the commit of a code index (`tomosu index`) to link
+ * production telemetry to code with full confidence; a non-commit version
+ * falls back to the newest index with lowered confidence.
+ *
+ * Order: SERVICE_VERSION env (set it in CI/Docker images, where there is no
+ * .git) > service.version in OTEL_RESOURCE_ATTRIBUTES > `git rev-parse HEAD`
+ * > package.json version.
+ */
+function resolveServiceVersion() {
+  if (process.env.SERVICE_VERSION) return process.env.SERVICE_VERSION;
+  const fromEnv = String(process.env.OTEL_RESOURCE_ATTRIBUTES || '')
+    .split(',')
+    .map((pair) => pair.split('='))
+    .find(([key]) => key && key.trim() === 'service.version');
+  if (fromEnv && fromEnv[1]) return decodeURIComponent(fromEnv[1].trim());
+  try {
+    return require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: __dirname, timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'],
+    }).toString().trim() || PACKAGE_VERSION;
+  } catch {
+    return PACKAGE_VERSION;
+  }
+}
+
+const SERVICE_VERSION = resolveServiceVersion();
 
 let sdk = null;
 let shutdownPromise = null;
@@ -69,6 +98,7 @@ function start({ serviceName, attributes = {} } = {}) {
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME || serviceName,
       [ATTR_SERVICE_VERSION]: SERVICE_VERSION,
+      'app.package.version': PACKAGE_VERSION,
       'service.namespace': SERVICE_NAMESPACE,
       'deployment.environment.name': process.env.DEPLOYMENT_ENVIRONMENT || 'local',
       ...attributes,
@@ -123,4 +153,4 @@ function shutdown(timeoutMs = 5000) {
   return shutdownPromise;
 }
 
-module.exports = { start, shutdown, SERVICE_VERSION };
+module.exports = { start, shutdown, SERVICE_VERSION, PACKAGE_VERSION };

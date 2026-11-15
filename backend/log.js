@@ -18,9 +18,9 @@
  */
 
 const { logs, trace, SeverityNumber } = require('@opentelemetry/api');
-const { SERVICE_VERSION } = require('./telemetry');
+const { PACKAGE_VERSION } = require('./telemetry');
 
-const otelLogger = logs.getLogger('worst-pri-product', SERVICE_VERSION);
+const otelLogger = logs.getLogger('worst-pri-product', PACKAGE_VERSION);
 
 const LEVELS = {
   debug: { severityNumber: SeverityNumber.DEBUG, severityText: 'DEBUG', write: console.debug },
