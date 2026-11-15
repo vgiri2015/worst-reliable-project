@@ -80,3 +80,18 @@ Plus earlier bonus breaches: `POST /api/login` (any password = admin), `GET /api
 
 > Every exhibit is commented with its `[Cat N]` tag in the source, and each maps to a
 > real support-ticket class. Read it as a "what NOT to do" tour.
+
+## Observability (OpenTelemetry)
+
+The app emits traces, metrics and logs over OTLP to an OpenTelemetry Collector:
+
+```bash
+./run.sh --with-collector                 # collector + app + load generator (Node >= 22.15, Docker)
+DOWNSTREAM_OTLP_ENDPOINT=http://host.docker.internal:5318 ./run.sh --with-collector   # also forward
+```
+
+Instrumentation lives in `backend/telemetry.js`, `backend/instruments.js` and `backend/log.js`.
+The collector stack (configs, docker-compose, verify script, and the full telemetry contract)
+lives in a separate `worst-pri-otel` folder next to this repo; `run.sh` looks for it at
+`../worst-pri-otel` (override with `OTEL_STACK_DIR`). Without a collector, telemetry export
+fails harmlessly; set `OTEL_SDK_DISABLED=true` to turn it off.

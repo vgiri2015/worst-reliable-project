@@ -13,6 +13,25 @@
  *   DURATION seconds to run     (default 0 = run forever)
  */
 
+// Telemetry first: instruments global fetch (undici) so every request carries a
+// W3C traceparent header and client spans join the server's traces.
+const telemetry = require('./telemetry');
+telemetry.start({ serviceName: 'worst-pri-load-generator' });
+
+const { SpanKind, SpanStatusCode } = require('@opentelemetry/api');
+const { meter, withSpan } = require('./instruments');
+const log = require('./log');
+
+const loadgenRequests = meter.createCounter('loadgen.requests', {
+  description: 'Requests sent by the simulated customer base, by outcome.',
+  unit: '{request}',
+});
+const loadgenDuration = meter.createHistogram('loadgen.request.duration', {
+  description: 'Client-observed latency per simulated customer action.',
+  unit: 's',
+  advice: { explicitBucketBoundaries: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 4, 5] },
+});
+
 const TARGET = process.env.TARGET || 'http://localhost:3000';
 const USERS = Number(process.env.USERS || 25);
 const RPM = Number(process.env.RPM || 12);
@@ -23,8 +42,23 @@ const pick = (a) => a[Math.floor(Math.random() * a.length)];
 
 const stats = { requests: 0, ok: 0, failed: 0, tickets: 0, byCode: {} };
 
+// One INTERNAL span per simulated customer action; the instrumented fetch()
+// becomes its CLIENT child and the server's spans continue the same trace.
 async function hit(pathAndOpts) {
   const [url, opts] = pathAndOpts;
+  const method = (opts && opts.method) || 'GET';
+  const action = method === 'POST' ? 'save_customer' : (url.endsWith('/analyze') ? 'analyze_customer' : 'list_customers');
+  const started = process.hrtime.bigint();
+  const outcome = await withSpan(`loadgen.${action}`, {
+    kind: SpanKind.INTERNAL,
+    attributes: { 'loadgen.action': action, 'url.path': url },
+  }, (span) => hitUntraced(url, opts, span));
+  const attrs = { 'loadgen.action': action, 'loadgen.outcome': outcome.result, 'http.response.status_code': outcome.code || 0 };
+  loadgenRequests.add(1, attrs);
+  loadgenDuration.record(Number(process.hrtime.bigint() - started) / 1e9, attrs);
+}
+
+async function hitUntraced(url, opts, span) {
   const requestId = `load-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const controller = new AbortController();
   const timeoutMs = Number(process.env.LOAD_FETCH_TIMEOUT_MS || 5000);
@@ -38,6 +72,7 @@ async function hit(pathAndOpts) {
     });
     const code = res.statusCode || res.status;
     stats.byCode[code] = (stats.byCode[code] || 0) + 1;
+    span.setAttribute('http.response.status_code', code);
     // read body so corrupted-JSON responses also register as client-side failures
     let body = null;
     try {
@@ -45,18 +80,24 @@ async function hit(pathAndOpts) {
     } catch (err) {
       stats.failed += 1;
       stats.tickets += 1; // parse crash = angry customer
-      console.error(JSON.stringify({ level: 'error', message: '[tomo-id-025] worst-pri-product/backend/load_generator.js: response JSON parse failed', requestId, path: url, errorType: err.name, action: 'inspect server response body and content-type' }));
-      return;
+      log.error('[tomo-id-025] worst-pri-product/backend/load_generator.js: response JSON parse failed', { requestId, path: url, errorType: err.name, action: 'inspect server response body and content-type' });
+      span.setStatus({ code: SpanStatusCode.ERROR, message: 'response JSON parse failed' });
+      return { result: 'parse_error', code };
     }
     if (code >= 400 || body === null) {
       stats.failed += 1;
-    } else {
-      stats.ok += 1;
+      span.setStatus({ code: SpanStatusCode.ERROR, message: `HTTP ${code}` });
+      return { result: 'http_error', code };
     }
+    stats.ok += 1;
+    return { result: 'success', code };
   } catch (err) {
     stats.failed += 1;
     stats.tickets += 1; // network/connection error
-    console.error(JSON.stringify({ level: 'error', message: '[tomo-id-026] worst-pri-product/backend/load_generator.js: request failed or timed out', requestId, path: url, timeoutMs, errorType: err.name, action: 'verify target availability and timeout budget' }));
+    span.recordException(err);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+    log.error('[tomo-id-026] worst-pri-product/backend/load_generator.js: request failed or timed out', { requestId, path: url, timeoutMs, errorType: err.name, action: 'verify target availability and timeout budget' });
+    return { result: err.name === 'AbortError' ? 'timeout' : 'network_error', code: 0 };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -86,12 +127,19 @@ async function userLoop(id, stopAt) {
 }
 
 async function pollServerTickets() {
+  const requestId = `metrics-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.LOAD_METRICS_TIMEOUT_MS || 3000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(TARGET + '/api/metrics');
+    const res = await fetch(TARGET + '/api/metrics', { headers: { 'x-request-id': requestId }, signal: controller.signal });
     const m = await res.json();
     return m;
-  } catch (_) {
+  } catch (err) {
+    log.error('[tomo-id-019] worst-pri-product/backend/load_generator.js: metrics polling failed or timed out', { requestId, timeoutMs, errorType: err.name, action: 'verify metrics endpoint health and timeout budget' });
     return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -136,8 +184,17 @@ async function main() {
     clearInterval(reporter);
     await report();
     console.log('\nDone. Ran for ' + DURATION + 's.');
+    await telemetry.shutdown();
     process.exit(0);
   }
 }
+
+// Flush buffered telemetry when run.sh (or Ctrl-C) stops the swarm.
+async function stop() {
+  await telemetry.shutdown();
+  process.exit(0);
+}
+process.on('SIGTERM', stop);
+process.on('SIGINT', stop);
 
 main();

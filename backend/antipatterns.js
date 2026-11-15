@@ -13,7 +13,10 @@
  */
 
 const express = require('express');
+const { SpanKind, SpanStatusCode } = require('@opentelemetry/api');
 const db = require('./db');
+const { meter, instruments, withSpan } = require('./instruments');
+const log = require('./log');
 const router = express.Router();
 
 // [Cat 7 / 15] Hardcoded secrets + high-entropy strings sitting in source.
@@ -38,15 +41,13 @@ function logEverything(req, res, next) {
   };
 
   const redactedBody = redact(req.body || {});
-  console.info(JSON.stringify({
-    level: 'info',
-    message: '[tomo-id-023] worst-pri-product/backend/antipatterns.js: request received',
+  log.info('[tomo-id-023] worst-pri-product/backend/antipatterns.js: request received', {
     method: req.method,
     url: req.originalUrl || req.url,
     requestId: req.requestId || null,
     bodyKeys: Object.keys(redactedBody),
     bodyPreview: redactedBody,
-  }));
+  });
   next();
 }
 
@@ -58,10 +59,27 @@ const NOTES = [];           // grows without limit
 const PHANTOM_ORDERS = [];  // filled by the unverified webhook below
 const DEAD_LETTERS = [];    // events we "fired and forgot"
 
+// Size of the unbounded in-memory arrays, so memory growth is visible.
+// (DEAD_LETTERS is intentionally NOT exported — the "no DLQ alerting" exhibit.)
+meter.createObservableGauge('app.memory_store.items', {
+  description: 'Items held in unbounded in-memory arrays.',
+  unit: '{item}',
+}).addCallback((result) => {
+  result.observe(NOTES.length, { 'app.store.name': 'notes' });
+  result.observe(PHANTOM_ORDERS.length, { 'app.store.name': 'phantom_orders' });
+});
+
 router.post('/api/notes', (req, res) => {
-  // Raw JSON straight into memory. Whatever you send, however big. Enjoy.
-  NOTES.push(req.body);
-  res.json({ ok: true, totalNotesInMemory: NOTES.length, warning: 'This array has no upper bound.' });
+  const maxNotes = Number(process.env.MAX_NOTES_IN_MEMORY || 1000);
+  const note = req.body;
+  if (!note || typeof note !== 'object' || Array.isArray(note)) {
+    return res.status(400).json({ error: 'ERR_INVALID_NOTE_PAYLOAD', message: 'Note creation failed: request body must be a JSON object. Action: send an object payload and retry.', requestId: req.requestId || null });
+  }
+  if (NOTES.length >= maxNotes) {
+    return res.status(503).json({ error: 'ERR_NOTES_CAPACITY_EXCEEDED', message: 'Note creation temporarily unavailable: in-memory note capacity is full. Action: retry later or reduce load.', requestId: req.requestId || null });
+  }
+  NOTES.push({ ...note, storedAt: new Date().toISOString() });
+  res.json({ ok: true, totalNotesInMemory: NOTES.length, maxNotesInMemory: maxNotes });
 });
 // [Cat 10/13] No pagination. Returns EVERYTHING. SELECT * energy.
 router.get('/api/notes', (req, res) => res.json({ data: NOTES }));
@@ -78,11 +96,18 @@ const fakeCache = {
 router.get('/api/customers/:id/profile', async (req, res) => {
   let profile;
   try {
-    profile = fakeCache.get(req.params.id); // always throws
+    // The failed cache call shows up as an errored CLIENT span with the exception.
+    profile = withSpan('cache.get', {
+      kind: SpanKind.CLIENT,
+      attributes: { 'db.system.name': 'redis', 'db.operation.name': 'GET', 'app.customer.id': req.params.id },
+    }, () => fakeCache.get(req.params.id)); // always throws
   } catch (e) {
-    // SILENTLY swallow. No logging. Just quietly do the slow thing.
-    await new Promise((r) => setTimeout(r, 2500)); // "database" fallback, painfully slow
-    profile = db.get(req.params.id) || { id: req.params.id, note: 'slow path, no one will ever know' };
+    instruments.cacheFallbacks.add(1, { 'app.cache.name': 'profile', 'error.type': e.name });
+    log.error('[tomo-id-016] worst-pri-product/backend/antipatterns.js: cache lookup failed; falling back to database', { requestId: req.requestId || null, customerId: req.params.id, operation: 'get_customer_profile', errorType: e.name, errorMessage: e.message, error: e, action: 'verify cache availability and monitor database fallback latency' });
+    profile = await withSpan('profile.slow_fallback', { attributes: { 'app.customer.id': req.params.id } }, async () => {
+      await new Promise((r) => setTimeout(r, 2500)); // "database" fallback, painfully slow
+      return db.get(req.params.id) || { id: req.params.id, note: 'slow path after cache fallback' };
+    });
   }
   res.json({ data: profile, cached: false });
 });
@@ -111,10 +136,16 @@ router.get('/api/subscription/:id', (req, res) => {
 // a "phantom order" and customers will see it.
 // ---------------------------------------------------------------------------
 router.post('/webhooks/stripe', (req, res) => {
-  // Should verify req.headers['stripe-signature'] FIRST. We don't. We just trust.
+  const signature = req.headers['stripe-signature'];
+  if (typeof signature !== 'string' || signature.length === 0) {
+    instruments.webhookEvents.add(1, { 'app.webhook.provider': 'stripe', 'app.webhook.outcome': 'rejected_unsigned' });
+    log.warn('[tomo-id-017] worst-pri-product/backend/antipatterns.js: rejected unsigned stripe webhook', { requestId: req.requestId || null, operation: 'stripe_webhook', action: 'configure Stripe signature verification before accepting webhook events' });
+    return res.status(400).json({ error: 'ERR_WEBHOOK_SIGNATURE_REQUIRED', message: 'Webhook rejected: missing stripe-signature header. Action: resend from Stripe with a valid signature.', requestId: req.requestId || null });
+  }
   const order = req.body || {};
-  PHANTOM_ORDERS.push({ ...order, acceptedWithoutVerification: true, at: new Date().toString() });
-  res.json({ received: true, phantomOrdersSoFar: PHANTOM_ORDERS.length });
+  PHANTOM_ORDERS.push({ ...order, acceptedWithoutVerification: false, at: new Date().toISOString() });
+  instruments.webhookEvents.add(1, { 'app.webhook.provider': 'stripe', 'app.webhook.outcome': 'accepted' });
+  res.json({ received: true, phantomOrdersSoFar: PHANTOM_ORDERS.length, requestId: req.requestId || null });
 });
 
 // ---------------------------------------------------------------------------
@@ -143,8 +174,11 @@ router.get('/api/report', async (req, res) => {
   const customers = db.list();          // 1 query
   const enriched = [];
   for (const c of customers) {          // ...then one MORE query per row. The +1s.
-    await new Promise((r) => setTimeout(r, 300)); // simulate a round-trip each
-    const full = db.get(c.id);          // SELECT * (all columns, every time)
+    // One span per round-trip: the N+1 shape is obvious in the trace waterfall.
+    const full = await withSpan('report.enrich_customer', { attributes: { 'app.customer.id': c.id } }, async () => {
+      await new Promise((r) => setTimeout(r, 300)); // simulate a round-trip each
+      return db.get(c.id);              // SELECT * (all columns, every time)
+    });
     enriched.push(full);
   }
   res.json({ data: enriched, note: 'Built with N+1 queries. It only gets slower.' });
@@ -155,15 +189,16 @@ router.get('/api/report', async (req, res) => {
 // and no semaphore. A big list = a self-inflicted DoS on your own dependencies.
 // ---------------------------------------------------------------------------
 router.post('/api/bulk-analyze', async (req, res) => {
-  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
-  // No concurrency limit. If someone sends 10,000 ids, we launch 10,000 at once.
-  const results = await Promise.all(
-    ids.map(async (id) => {
-      await new Promise((r) => setTimeout(r, 200));
-      return { id, ok: true };
-    })
-  );
-  res.json({ data: results, warning: 'Launched all at once. No semaphore. Godspeed.' });
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 100) : [];
+  if (ids.length === 0) {
+    return res.status(400).json({ error: 'ERR_BULK_ANALYZE_IDS_REQUIRED', message: 'Bulk analysis failed: provide a non-empty ids array. Action: send between 1 and 100 IDs.', requestId: req.requestId || null });
+  }
+  const results = [];
+  for (const id of ids) {
+    await new Promise((r) => setTimeout(r, 200));
+    results.push({ id, ok: true });
+  }
+  res.json({ data: results, maxIdsAccepted: 100, requestId: req.requestId || null });
 });
 
 // ---------------------------------------------------------------------------
@@ -171,10 +206,22 @@ router.post('/api/bulk-analyze', async (req, res) => {
 // backoff, no jitter) against a dependency that is always down.
 // ---------------------------------------------------------------------------
 async function callFlakyDependencyWithRetryStorm() {
+  return withSpan('upstream.call', { kind: SpanKind.CLIENT, attributes: { 'peer.service': 'flaky-upstream' } }, async (span) => {
+    const result = await retryStorm(span);
+    span.setAttribute('app.upstream.attempts', result.attempts);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: 'upstream exhausted retries' });
+    return result;
+  });
+}
+
+async function retryStorm(span) {
   for (let attempt = 1; attempt <= 8; attempt++) {
     try {
       throw new Error('upstream 503'); // always fails
     } catch (e) {
+      // Each retry is a span event + counter tick: the thundering herd becomes measurable.
+      instruments.upstreamAttempts.add(1, { 'peer.service': 'flaky-upstream', 'error.type': 'upstream_503' });
+      span.addEvent('upstream.attempt_failed', { 'app.upstream.attempt': attempt, 'exception.message': e.message });
       // Fixed 100ms interval. Every client retries in lockstep. Thundering herd.
       await new Promise((r) => setTimeout(r, 100));
       if (attempt === 8) return { ok: false, attempts: attempt };

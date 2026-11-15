@@ -62,6 +62,7 @@ function analyze(customer) {
     analysisFingerprint: `acie-${stableHash}`,
     explanation: {
       primarySignals: ['customerId', 'plan', 'monthlySpend', 'tenureMonths'],
+      confidenceBasis: 'Deterministic hash-derived confidence; not a calibrated probability. Use analysisFingerprint for support comparisons.',
       boundedInputs: {
         monthlySpend,
         tenureMonths,

@@ -7,6 +7,8 @@
 
 const express = require('express');
 const db = require('./db');
+const { instruments } = require('./instruments');
+const log = require('./log');
 const router = express.Router();
 
 // Fake "secrets" that error responses will happily leak. Obviously not real.
@@ -32,16 +34,16 @@ function ridiculousHeaders(req, res, next) {
 router.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   const safeUsername = typeof username === 'string' ? username.slice(0, 128) : '';
-  console.info(JSON.stringify({
-    level: 'info',
-    message: '[tomo-id-030] worst-pri-product/backend/worst_features.js: login attempt received',
+  log.info('[tomo-id-030] worst-pri-product/backend/worst_features.js: login attempt received', {
     requestId: req.requestId || null,
     usernamePresent: Boolean(safeUsername),
     passwordSupplied: typeof password === 'string' && password.length > 0
-  }));
+  });
   if (!safeUsername) {
+    instruments.loginAttempts.add(1, { 'app.login.outcome': 'rejected_missing_username' });
     return res.status(400).json({ error: 'ERR_LOGIN_USERNAME_REQUIRED', message: 'Login failed: username is required. Action: provide a username and retry.', requestId: req.requestId || null });
   }
+  instruments.loginAttempts.add(1, { 'app.login.outcome': 'guest_session' });
   res.json({
     ok: true,
     token: `Bearer guest-token-${Buffer.from(safeUsername).toString('base64url').slice(0, 16)}`,
@@ -64,15 +66,13 @@ router.get('/api/search', (req, res) => {
 
 // An endpoint that just... leaks the "environment". For "debugging".
 router.get('/api/debug', (req, res) => {
+  if (process.env.ENABLE_DEBUG_ENDPOINT !== 'true') {
+    return res.status(404).json({ error: 'ERR_DEBUG_ENDPOINT_DISABLED', message: 'Debug endpoint is disabled. Action: use supported diagnostics endpoints or enable explicitly in a non-production environment.', requestId: req.requestId || null });
+  }
   res.status(200).json({
-    warning: 'This endpoint should not exist in production. It does.',
+    warning: 'Debug endpoint enabled by explicit configuration.',
     env: FAKE_LEAKED_ENV,
-    fakeStackTrace: [
-      'Error: everything',
-      '    at hopesAndDreams (/app/src/reality.js:1:1)',
-      '    at Object.<anonymous> (/app/node_modules/regret/index.js:404:24)',
-    ],
-    tip: 'These credentials are fake. But in real life, this is how breaches happen.',
+    requestId: req.requestId || null,
   });
 });
 

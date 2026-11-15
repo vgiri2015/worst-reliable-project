@@ -1,22 +1,38 @@
 'use strict';
 
+// OpenTelemetry must start before express/http are loaded so they get instrumented.
+const telemetry = require('./telemetry');
+telemetry.start({ serviceName: 'worst-pri-product', attributes: { 'app.chaos.level': Number(process.env.CHAOS_LEVEL ?? 5) } });
+
 const path = require('path');
+const { trace } = require('@opentelemetry/api');
 const express = require('express');
 const db = require('./db');
 const aiModel = require('./ai_model');
 const { chaosMiddleware, CHAOS } = require('./chaos');
 const { router: worstRouter, ridiculousHeaders } = require('./worst_features');
 const { router: museumRouter, logEverything, startBlindJob } = require('./antipatterns');
+const { meter, instruments, withSpan } = require('./instruments');
+const log = require('./log');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '256kb' }));
 
+// requestId = caller's x-request-id, else the OpenTelemetry trace id, so the ID a
+// customer quotes to support is the same ID you search for in the tracing backend.
+// Incoming W3C traceparent headers are honored by the http instrumentation.
 app.use((req, res, next) => {
-  const requestId = String(req.headers['x-request-id'] || req.headers.traceparent || `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+  const span = trace.getActiveSpan();
+  const traceId = span ? span.spanContext().traceId : null;
+  const requestId = String(req.headers['x-request-id'] || traceId || `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
   req.requestId = requestId;
   res.set('x-request-id', requestId);
+  if (span) {
+    span.setAttribute('app.request_id', requestId);
+    res.set('x-trace-id', traceId);
+  }
   next();
 });
 
@@ -39,6 +55,7 @@ app.use((req, res, next) => {
   res.set('x-ratelimit-remaining', String(Math.max(0, maxRequests - bucket.count)));
 
   if (bucket.count > maxRequests) {
+    instruments.rateLimitRejections.add(1);
     return res.status(429).json({ error: 'ERR_RATE_LIMITED', message: 'Too many requests from this client. Action: retry after the rate-limit window resets.', requestId: req.requestId });
   }
 
@@ -64,10 +81,29 @@ function projectedDailyTickets() {
   return Math.round((ticketsToday / hours) * 24);
 }
 
+// Gauges sampled at each metric export.
+meter.createObservableGauge('app.support_tickets.projected_daily', {
+  description: 'Projected support tickets per day at the current failure rate.',
+  unit: '{ticket}',
+}).addCallback((result) => result.observe(projectedDailyTickets()));
+meter.createObservableGauge('app.db.customers', {
+  description: 'Customers currently held in the in-memory store.',
+  unit: '{customer}',
+}).addCallback((result) => result.observe(db.size()));
+
 // Count a "ticket" whenever we send a 4xx/5xx. Hook into res.
+// Low-cardinality attributes only: route template (not raw URL), status, source.
 app.use((req, res, next) => {
   res.on('finish', () => {
-    if (res.statusCode >= 400) ticketsToday += 1;
+    if (res.statusCode >= 400) {
+      ticketsToday += 1;
+      instruments.supportTickets.add(1, {
+        'http.request.method': req.method,
+        'http.route': req.route ? `${req.baseUrl || ''}${req.route.path}` : '(unmatched)',
+        'http.response.status_code': res.statusCode,
+        'app.ticket.source': req.chaosInjected ? 'chaos' : 'application',
+      });
+    }
   });
   next();
 });
@@ -134,20 +170,43 @@ app.get('/api/customers/:id/analyze', (req, res) => {
   if (!customer) {
     return res.status(404).json({ error: 'ERR_CUSTOMER_NOT_FOUND', message: 'Customer analysis failed: customer was not found. Action: verify the customer ID and retry.', requestId: req.requestId });
   }
+  const started = process.hrtime.bigint();
+  const plan = typeof customer.plan === 'string' ? customer.plan : 'unknown';
   try {
-    const result = aiModel.analyze(customer);
+    const result = withSpan('ai_model.analyze', {
+      attributes: { 'app.customer.id': String(customer.id), 'app.customer.plan': plan },
+    }, (span) => {
+      const analysis = aiModel.analyze(customer);
+      span.setAttributes({
+        'app.ai.model_version': analysis.modelVersion,
+        'app.ai.segment': analysis.segment,
+        'app.ai.sentiment': analysis.sentiment,
+        'app.ai.churn_risk': analysis.churnRiskPercent,
+        'app.ai.confidence': Number(analysis.modelConfidencePercent),
+        'app.ai.fingerprint': analysis.analysisFingerprint,
+      });
+      return analysis;
+    });
+    instruments.aiAnalysisDuration.record(Number(process.hrtime.bigint() - started) / 1e9, { 'app.ai.outcome': 'success' });
+    instruments.aiAnalyses.add(1, { 'app.ai.outcome': 'success', 'app.ai.segment': result.segment, 'app.customer.plan': plan });
+    instruments.aiChurnRisk.record(result.churnRiskPercent, { 'app.customer.plan': plan });
     res.json({ data: result, requestId: req.requestId });
   } catch (err) {
-    console.error(JSON.stringify({ level: 'error', message: '[tomo-id-017] worst-pri-product/backend/server.js: customer analysis failed', requestId: req.requestId, customerId: req.params.id, operation: 'analyze_customer', errorType: err.name, errorMessage: err.message, action: 'verify customer payload fields before retrying analysis' }));
+    instruments.aiAnalysisDuration.record(Number(process.hrtime.bigint() - started) / 1e9, { 'app.ai.outcome': 'error' });
+    instruments.aiAnalyses.add(1, { 'app.ai.outcome': 'error', 'app.customer.plan': plan });
+    log.error('[tomo-id-017] worst-pri-product/backend/server.js: customer analysis failed', { requestId: req.requestId, customerId: req.params.id, operation: 'analyze_customer', errorType: err.name, errorMessage: err.message, error: err, action: 'verify customer payload fields before retrying analysis' });
     res.status(500).json({ error: 'ERR_MODEL_ANALYSIS_FAILED', message: 'Customer analysis failed due to a model processing error. Action: provide this requestId to support.', requestId: req.requestId });
   }
 });
 
 // Create/update a customer (may silently fail to save — see db.js).
 app.post('/api/customers', (req, res) => {
-  const saved = db.upsert(req.body || {});
-  // We always say 201, even when _saved is false. Optimism!
-  res.status(201).json({ data: saved, message: 'Saved successfully (probably).' });
+  const payload = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : null;
+  if (!payload) {
+    return res.status(400).json({ error: 'ERR_INVALID_CUSTOMER_PAYLOAD', message: 'Customer save failed: request body must be a JSON object. Action: send a valid customer object and retry.', requestId: req.requestId });
+  }
+  const saved = db.upsert(payload);
+  res.status(201).json({ data: saved, message: 'Saved successfully.', requestId: req.requestId });
 });
 
 // [Cat 11] Blind background job with no start/finish logging and swallowed errors.
@@ -157,25 +216,31 @@ startBlindJob();
 // (We deliberately do NOT register process.on('SIGTERM', ...). Data loss on deploy.)
 
 const server = app.listen(PORT, () => {
-  console.info(JSON.stringify({
-    level: 'info',
-    message: '[tomo-id-027] worst-pri-product/backend/server.js: server started',
+  log.info('[tomo-id-027] worst-pri-product/backend/server.js: server started', {
     port: Number(PORT),
     chaosLevel: CHAOS,
-    museumPath: '/api/museum'
-  }));
+    museumPath: '/api/museum',
+    otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318',
+    telemetryEnabled: String(process.env.OTEL_SDK_DISABLED).toLowerCase() !== 'true',
+  });
 });
 
+let shuttingDown = false;
 function shutdown(signal) {
-  console.info(JSON.stringify({ level: 'info', message: '[tomo-id-028] worst-pri-product/backend/server.js: graceful shutdown started', signal }));
-  server.close((err) => {
-    if (err) {
-      console.error(JSON.stringify({ level: 'error', message: '[tomo-id-029] worst-pri-product/backend/server.js: graceful shutdown failed', errorType: err.name, errorMessage: err.message, action: 'inspect open connections and retry termination' }));
-      process.exit(1);
-    }
-    process.exit(0);
-  });
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log.info('[tomo-id-028] worst-pri-product/backend/server.js: graceful shutdown started', { signal });
   setTimeout(() => process.exit(1), 10000).unref();
+  server.close(async (err) => {
+    if (err) {
+      log.error('[tomo-id-029] worst-pri-product/backend/server.js: graceful shutdown failed', { errorType: err.name, errorMessage: err.message, error: err, action: 'inspect open connections and retry termination' });
+    }
+    // Flush buffered spans/metrics/logs (including the lines above) before exiting.
+    await telemetry.shutdown();
+    process.exit(err ? 1 : 0);
+  });
+  // Let in-flight requests finish, but drop idle keep-alive sockets so close() completes.
+  server.closeIdleConnections();
 }
 
 process.on('SIGTERM', shutdown);
